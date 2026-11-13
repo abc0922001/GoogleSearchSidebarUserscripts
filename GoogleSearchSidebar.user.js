@@ -4,7 +4,7 @@
 // @description  Unfolds Google Search "Tools" dropdown menus (Language, Time, Verbatim, Advanced Search) into a clean vertical left sidebar.
 // @description:zh-TW 將 Google 搜尋結果頁面頂部需點擊「工具」才能看到的下拉選單（語言、時間範圍、所有結果、進階搜尋等），直接全部攤開並內嵌展示於頁面左側空白處。
 // @namespace    https://greasyfork.org/users/1237813-abc0922001
-// @version      1.0.0
+// @version      1.0.1
 // @author       abc0922001
 // @license      MIT
 // @match        https://www.google.com/search*
@@ -151,8 +151,10 @@
         --gs-sb-active: #dd4b39;
         position: absolute;
         left: ${SIDEBAR_LEFT}px;
+        inset-block-start: var(--gs-sb-top, 80px);
         width: ${SIDEBAR_WIDTH}px;
         box-sizing: border-box;
+        contain: layout style;
         z-index: 98;
         font-family: arial, sans-serif;
         font-size: 13px;
@@ -167,39 +169,62 @@
         --gs-sb-border: #3c4043;
         --gs-sb-active: #f28b82;
       }
-      #${SIDEBAR_ID}[data-hidden="true"] {
+      @media (prefers-contrast: more) {
+        #${SIDEBAR_ID} {
+          --gs-sb-text: #202124;
+          --gs-sb-border: #5f6368;
+          --gs-sb-active: #b3261e;
+        }
+        #${SIDEBAR_ID}[data-theme="dark"] {
+          --gs-sb-text: #ffffff;
+          --gs-sb-border: #9aa0a6;
+          --gs-sb-active: #f6aea9;
+        }
+      }
+      @media (forced-colors: active) {
+        #${SIDEBAR_ID} {
+          --gs-sb-text: LinkText;
+          --gs-sb-text-hover: LinkText;
+          --gs-sb-border: CanvasText;
+          --gs-sb-active: Highlight;
+        }
+      }
+      #${SIDEBAR_ID}[hidden] {
         display: none !important;
       }
       #${SIDEBAR_ID} .gs-sb-group {
         list-style: none;
         margin: 0;
-        padding: 8px 0;
-        border-bottom: 1px solid var(--gs-sb-border);
+        padding: 0;
       }
-      #${SIDEBAR_ID} .gs-sb-group:first-child {
-        padding-top: 0;
+      #${SIDEBAR_ID} .gs-sb-group:not(:first-child) {
+        padding-block-start: 8px;
       }
-      #${SIDEBAR_ID} .gs-sb-group:last-child {
-        border-bottom: none;
+      #${SIDEBAR_ID} .gs-sb-group:not(:last-child) {
+        padding-block-end: 8px;
+        border-block-end: 1px solid var(--gs-sb-border);
       }
       #${SIDEBAR_ID} .gs-sb-item {
-        margin: 1px 0;
+        margin-block: 1px;
+        margin-inline: 0;
         padding: 0;
       }
       #${SIDEBAR_ID} .gs-sb-link {
         display: flex;
         align-items: flex-start;
         gap: 5px;
-        width: 100%;
+        inline-size: 100%;
+        min-block-size: 24px;
         box-sizing: border-box;
-        padding: 5px 8px;
+        padding-block: 5px;
+        padding-inline: 8px;
         border: none;
         border-radius: 4px;
         background: transparent;
         color: var(--gs-sb-text);
         text-decoration: none;
         font: inherit;
-        text-align: left;
+        text-align: start;
         cursor: pointer;
         word-break: break-word;
         transition: background-color 0.12s ease, color 0.12s ease;
@@ -209,20 +234,25 @@
         color: var(--gs-sb-text-hover);
         text-decoration: none;
       }
-      #${SIDEBAR_ID} .gs-sb-link[data-active="true"] {
+      #${SIDEBAR_ID} .gs-sb-link:focus-visible {
+        outline: 2px solid var(--gs-sb-active);
+        outline-offset: 1px;
+        color: var(--gs-sb-text-hover);
+      }
+      #${SIDEBAR_ID} .gs-sb-link:where([data-active="true"], [aria-current="page"], [aria-pressed="true"]) {
         color: var(--gs-sb-active);
         font-weight: 700;
       }
       #${SIDEBAR_ID} .gs-sb-check {
         display: inline-block;
-        width: 12px;
+        inline-size: 12px;
         flex-shrink: 0;
         font-weight: 700;
         color: var(--gs-sb-active);
       }
       #${SIDEBAR_ID} .gs-sb-label {
         flex: 1;
-        min-width: 0;
+        min-inline-size: 0;
       }
       html.gs-sb-silent-probe #hdtbMenus {
         opacity: 0 !important;
@@ -706,6 +736,12 @@
     runtimeState.isAutoExpanding = true;
     document.documentElement.classList.add('gs-sb-silent-probe');
 
+    const menusEl = document.getElementById('hdtbMenus');
+    const prevInert = menusEl ? Boolean(menusEl.inert) : false;
+    if (menusEl) {
+      menusEl.inert = true;
+    }
+
     try {
       const wasCollapsed = toolsBtn.getAttribute('aria-expanded') !== 'true';
       if (wasCollapsed) {
@@ -725,11 +761,17 @@
           toolsBtn.click();
         }
 
+        if (menusEl) {
+          menusEl.inert = prevInert;
+        }
         document.documentElement.classList.remove('gs-sb-silent-probe');
         runtimeState.isAutoExpanding = false;
         scheduleRender();
       }, 180);
     } catch {
+      if (menusEl) {
+        menusEl.inert = prevInert;
+      }
       document.documentElement.classList.remove('gs-sb-silent-probe');
       runtimeState.isAutoExpanding = false;
     }
@@ -924,31 +966,34 @@
     runtimeState.isRendering = true;
 
     try {
-      ensureStylesInjected();
-
-      let sidebar = document.getElementById(SIDEBAR_ID);
+      // 讀取階段：一次完成版面座標、深淺色主題與篩選群組讀取，避免 DOM 讀寫交錯引發強制同步重排
       const placement = computeSidebarPlacement();
-
       if (!placement.visible) {
-        if (sidebar) {
-          sidebar.setAttribute('data-hidden', 'true');
+        const existingSidebar = document.getElementById(SIDEBAR_ID);
+        if (existingSidebar) {
+          existingSidebar.hidden = true;
         }
         return;
       }
 
+      const isDark = detectDarkMode();
+      const currentUrl = new URL(window.location.href);
+      const groups = resolveSidebarGroups(currentUrl);
+
+      // 寫入階段：注入樣式表並批次更新側邊欄節點與屬性
+      ensureStylesInjected();
+
+      let sidebar = document.getElementById(SIDEBAR_ID);
       if (!sidebar) {
         sidebar = document.createElement('nav');
         sidebar.id = SIDEBAR_ID;
-        sidebar.setAttribute('aria-label', 'Google 搜尋工具篩選側邊欄');
+        sidebar.setAttribute('aria-label', 'Google 搜尋工具篩選');
         document.body.appendChild(sidebar);
       }
 
-      sidebar.setAttribute('data-hidden', 'false');
-      sidebar.setAttribute('data-theme', detectDarkMode() ? 'dark' : 'light');
-      sidebar.style.top = `${placement.top}px`;
-
-      const currentUrl = new URL(window.location.href);
-      const groups = resolveSidebarGroups(currentUrl);
+      sidebar.hidden = false;
+      sidebar.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      sidebar.style.setProperty('--gs-sb-top', `${placement.top}px`);
 
       // 以結構簽章比對內容是否異動，避免無意義重建 DOM 節點
       const signature = JSON.stringify(
@@ -966,7 +1011,8 @@
         return;
       }
       sidebar.setAttribute('data-signature', signature);
-      sidebar.textContent = '';
+
+      const fragment = document.createDocumentFragment();
 
       for (const groupItems of groups) {
         if (!groupItems || groupItems.length === 0) {
@@ -988,8 +1034,12 @@
 
           if (control instanceof HTMLAnchorElement) {
             control.href = item.href;
+            if (item.active) {
+              control.setAttribute('aria-current', 'page');
+            }
           } else if (control instanceof HTMLButtonElement) {
             control.type = 'button';
+            control.setAttribute('aria-pressed', item.active ? 'true' : 'false');
             control.addEventListener('click', (event) => {
               event.preventDefault();
               triggerProxyClick(item.proxyNode || null, item.label);
@@ -1011,8 +1061,10 @@
           ul.appendChild(li);
         }
 
-        sidebar.appendChild(ul);
+        fragment.appendChild(ul);
       }
+
+      sidebar.replaceChildren(fragment);
     } finally {
       runtimeState.isRendering = false;
     }
